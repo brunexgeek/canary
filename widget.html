@@ -1,0 +1,195 @@
+<html>
+  <head><title>Widget</title>
+  </head>
+<body>
+<div id="comment-widget">
+  <h3>Comments</h3>
+
+  <div id="comment-list"></div>
+
+  <hr>
+
+  <h4>New comment</h4>
+  <form id="new-comment-form">
+    <label>
+      Username:
+      <input type="text" id="username" required>
+    </label>
+
+    <br>
+
+    <label>
+      Comment:
+      <textarea id="text" required></textarea>
+    </label>
+
+    <br>
+
+    <button type="submit">Post</button>
+  </form>
+</div>
+<style>
+  .comment {
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  }
+  .comment .user {
+    font-weight: 600;
+  }
+  .comment button {
+    background-color: transparent;
+    text-decoration: underline;
+    font-size: .9em;
+    border: none;
+  }
+  .replies {
+    margin-left: 2em;
+  }
+</style>
+<script>
+(() => {
+  const API_BASE = "http://127.0.0.1:8001";
+  const PAGE_URL = window.location.pathname;
+
+  const listEl = document.getElementById("comment-list");
+
+  const newForm = document.getElementById("new-comment-form");
+  const usernameEl = document.getElementById("username");
+  const textEl = document.getElementById("text");
+
+  let activeReplyForm = null;
+
+  async function fetchComments() {
+    const res = await fetch(
+      `${API_BASE}/comments?url=${encodeURIComponent(PAGE_URL)}`
+    );
+
+    const data = await res.json();
+    renderComments(data || []);
+  }
+
+  function renderComments(comments) {
+    listEl.innerHTML = "";
+    activeReplyForm = null;
+    comments.forEach(c => listEl.appendChild(renderComment(c)));
+  }
+
+  function renderComment(comment) {
+    const container = document.createElement("div");
+    container.classList.add("comment");
+    container.setAttribute("data-id", comment.id);
+
+    const header = document.createElement("div");
+    header.classList.add("header");
+    header.innerHTML = `
+      <span class="user">${escapeHtml(comment.username)}</span>
+      <span class="date"> ${new Date(comment.created_at).toLocaleString()}</span>
+    `;
+
+    const body = document.createElement("div");
+    body.textContent = comment.text;
+
+    const replyBtn = document.createElement("button");
+    replyBtn.textContent = "Reply";
+
+    const replyContainer = document.createElement("div");
+
+    replyBtn.onclick = () => {
+      // close previous reply form if open
+      if (activeReplyForm) {
+        activeReplyForm.remove();
+        activeReplyForm = null;
+      }
+
+      const form = createReplyForm(comment.id, replyContainer);
+      replyContainer.appendChild(form);
+      activeReplyForm = form;
+    };
+
+    container.appendChild(header);
+    container.appendChild(body);
+    container.appendChild(replyBtn);
+    container.appendChild(replyContainer);
+
+    // render replies
+    if (comment.replies && comment.replies.length > 0) {
+      const repliesWrap = document.createElement("div");
+      repliesWrap.classList.add("replies");
+
+      comment.replies.forEach(r => {
+        repliesWrap.appendChild(renderComment(r));
+      });
+
+      container.appendChild(repliesWrap);
+    }
+
+    return container;
+  }
+
+  function createReplyForm(parentId, container) {
+    const form = document.createElement("form");
+
+    form.innerHTML = `
+      <div>
+        <input type="text" name="username" placeholder="username" required>
+      </div>
+
+      <div>
+        <textarea name="text" placeholder="reply..." required></textarea>
+      </div>
+
+      <button type="submit">Reply</button>
+    `;
+
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+
+      const username = form.querySelector("input[name='username']").value;
+      const text = form.querySelector("textarea[name='text']").value;
+
+      await fetch(`${API_BASE}/comment`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          url: PAGE_URL,
+          username,
+          text,
+          parent_id: parentId
+        })
+      });
+
+      await fetchComments();
+    });
+
+    return form;
+  }
+
+  newForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+
+    await fetch(`${API_BASE}/comment`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        url: PAGE_URL,
+        username: usernameEl.value,
+        text: textEl.value,
+        parent_id: null
+      })
+    });
+
+    textEl.value = "";
+    await fetchComments();
+  });
+
+  function escapeHtml(str) {
+    return String(str)
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;");
+  }
+
+  fetchComments();
+})();
+</script>
+</body>
+</html>
