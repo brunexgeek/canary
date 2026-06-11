@@ -2,32 +2,6 @@
   <head><title>Widget</title>
   </head>
 <body>
-<div id="comment-widget">
-  <h3>Comments</h3>
-
-  <div id="comment-list"></div>
-
-  <hr>
-
-  <h4>New comment</h4>
-  <form id="new-comment-form">
-    <label>
-      Username:
-      <input type="text" id="username" required>
-    </label>
-
-    <br>
-
-    <label>
-      Comment:
-      <textarea id="text" required></textarea>
-    </label>
-
-    <br>
-
-    <button type="submit">Post</button>
-  </form>
-</div>
 <style>
   .comment {
     font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
@@ -45,6 +19,23 @@
     margin-left: 2em;
   }
 </style>
+<div id="comment-widget">
+  <h3>Comments</h3>
+
+  <div id="comment-list"></div>
+
+  <hr>
+
+  <h4>New comment</h4>
+  <form id="new-comment-form">
+    <input type="text" id="username" placeholder="username" required>
+    <br>
+    <textarea id="text" placeholder="comment..." required></textarea>
+    <br>
+    <button type="submit">Post</button>
+  </form>
+</div>
+
 <script>
 (() => {
   const API_BASE = "http://127.0.0.1:8001";
@@ -56,130 +47,247 @@
   const usernameEl = document.getElementById("username");
   const textEl = document.getElementById("text");
 
-  let activeReplyForm = null;
+  // cache so we don't fully refetch on every reply
+  let commentCache = [];
 
+  // -------------------------
+  // Init username from cookie
+  // -------------------------
+  usernameEl.value = getCookie("remote_user") || "";
+
+  // -------------------------
+  // Fetch comments
+  // -------------------------
   async function fetchComments() {
-    const res = await fetch(
-      `${API_BASE}/comments?url=${encodeURIComponent(PAGE_URL)}`
-    );
-
-    const data = await res.json();
-    renderComments(data || []);
+    const res = await fetch(`${API_BASE}/comments?url=${encodeURIComponent(PAGE_URL)}`);
+    commentCache = await res.json();
+    render();
   }
 
-  function renderComments(comments) {
+  // -------------------------
+  // Render tree
+  // -------------------------
+  function render() {
     listEl.innerHTML = "";
-    activeReplyForm = null;
-    comments.forEach(c => listEl.appendChild(renderComment(c)));
+    commentCache.forEach(c => listEl.appendChild(renderComment(c)));
   }
 
   function renderComment(comment) {
-    const container = document.createElement("div");
-    container.classList.add("comment");
-    container.setAttribute("data-id", comment.id);
+    const wrap = document.createElement("div");
+    wrap.dataset.id = comment.id;
 
     const header = document.createElement("div");
-    header.classList.add("header");
+
+    const collapseBtn = document.createElement("button");
+    collapseBtn.textContent = "-";
+    collapseBtn.onclick = () => {
+      const body = wrap.querySelector(".body");
+      const replies = wrap.querySelector(".replies");
+      const hidden = body.style.display === "none";
+      body.style.display = hidden ? "" : "none";
+      if (replies) replies.style.display = hidden ? "" : "none";
+      collapseBtn.textContent = hidden ? "-" : "+";
+    };
+
     header.innerHTML = `
-      <span class="user">${escapeHtml(comment.username)}</span>
-      <span class="date"> ${new Date(comment.created_at).toLocaleString()}</span>
+      <strong>${escapeHtml(comment.username)}</strong>
+      <small>#${comment.id}</small>
+      <small>${new Date(comment.created_at).toLocaleString()}</small>
     `;
 
+    header.prepend(collapseBtn);
+
     const body = document.createElement("div");
-    body.textContent = comment.text;
+    body.className = "body";
+    body.innerHTML = renderMarkdown(comment.text);
+
+    const actions = document.createElement("div");
 
     const replyBtn = document.createElement("button");
     replyBtn.textContent = "Reply";
 
-    const replyContainer = document.createElement("div");
+    const replyBox = document.createElement("div");
 
     replyBtn.onclick = () => {
-      // close previous reply form if open
-      if (activeReplyForm) {
-        activeReplyForm.remove();
-        activeReplyForm = null;
+      if (replyBox.childNodes.length) {
+        replyBox.innerHTML = "";
+        return;
       }
 
-      const form = createReplyForm(comment.id, replyContainer);
-      replyContainer.appendChild(form);
-      activeReplyForm = form;
+      replyBox.appendChild(createReplyForm(comment.id));
     };
 
-    container.appendChild(header);
-    container.appendChild(body);
-    container.appendChild(replyBtn);
-    container.appendChild(replyContainer);
+    actions.appendChild(replyBtn);
 
-    // render replies
-    if (comment.replies && comment.replies.length > 0) {
-      const repliesWrap = document.createElement("div");
-      repliesWrap.classList.add("replies");
+    wrap.appendChild(header);
+    wrap.appendChild(body);
+    wrap.appendChild(actions);
+    wrap.appendChild(replyBox);
+
+    // replies
+    if (comment.replies?.length) {
+      const replies = document.createElement("div");
+      replies.className = "replies";
+      replies.style.marginLeft = "20px";
 
       comment.replies.forEach(r => {
-        repliesWrap.appendChild(renderComment(r));
+        replies.appendChild(renderComment(r));
       });
 
-      container.appendChild(repliesWrap);
+      wrap.appendChild(replies);
     }
 
-    return container;
+    return wrap;
   }
 
-  function createReplyForm(parentId, container) {
+  // -------------------------
+  // Reply form
+  // -------------------------
+  function createReplyForm(parentId) {
     const form = document.createElement("form");
 
     form.innerHTML = `
-      <div>
-        <input type="text" name="username" placeholder="username" required>
-      </div>
-
-      <div>
-        <textarea name="text" placeholder="reply..." required></textarea>
-      </div>
-
-      <button type="submit">Reply</button>
+      <input name="username" placeholder="username" required value="${escapeHtml(usernameEl.value)}">
+      <br>
+      <textarea name="text" placeholder="reply..." required></textarea>
+      <br>
+      <button>Send reply</button>
+      <button>Cancel</button>
     `;
 
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
 
-      const username = form.querySelector("input[name='username']").value;
-      const text = form.querySelector("textarea[name='text']").value;
+      const username = form.username.value;
+      const text = form.text.value;
 
-      await fetch(`${API_BASE}/comment`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          url: PAGE_URL,
-          username,
-          text,
-          parent_id: parentId
-        })
-      });
+      const tempComment = optimisticAdd(username, text, parentId);
 
-      await fetchComments();
+      try {
+        await postComment(username, text, parentId);
+        await fetchComments();
+      } catch (err) {
+        console.error(err);
+        alert("Failed to post");
+        removeOptimistic(tempComment.id);
+      }
     });
 
     return form;
   }
 
+  // -------------------------
+  // New comment form
+  // -------------------------
   newForm.addEventListener("submit", async (e) => {
     e.preventDefault();
 
-    await fetch(`${API_BASE}/comment`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        url: PAGE_URL,
-        username: usernameEl.value,
-        text: textEl.value,
-        parent_id: null
-      })
-    });
+    const username = usernameEl.value;
+    const text = textEl.value;
+
+    const temp = optimisticAdd(username, text, null);
 
     textEl.value = "";
-    await fetchComments();
+
+    try {
+      await postComment(username, text, null);
+      await fetchComments();
+    } catch (err) {
+      console.error(err);
+      alert("Failed");
+      removeOptimistic(temp.id);
+    }
   });
+
+  // -------------------------
+  // Optimistic UI
+  // -------------------------
+  function optimisticAdd(username, text, parentId) {
+    const temp = {
+      id: "tmp-" + Math.random(),
+      username,
+      text,
+      created_at: new Date().toISOString(),
+      parent_id: parentId,
+      replies: []
+    };
+
+    insertIntoTree(commentCache, temp);
+    render();
+
+    return temp;
+  }
+
+  function removeOptimistic(id) {
+    commentCache = removeFromTree(commentCache, id);
+    render();
+  }
+
+  function insertIntoTree(tree, comment) {
+    if (!comment.parent_id) {
+      tree.unshift(comment);
+      return;
+    }
+
+    const parent = findComment(tree, comment.parent_id);
+    if (parent) parent.replies.push(comment);
+  }
+
+  function removeFromTree(tree, id) {
+    return tree
+      .filter(c => c.id !== id)
+      .map(c => ({
+        ...c,
+        replies: c.replies ? removeFromTree(c.replies, id) : []
+      }));
+  }
+
+  function findComment(tree, id) {
+    for (const c of tree) {
+      if (c.id == id) return c;
+      if (c.replies) {
+        const found = findComment(c.replies, id);
+        if (found) return found;
+      }
+    }
+    return null;
+  }
+
+  // -------------------------
+  // API
+  // -------------------------
+  async function postComment(username, text, parent_id) {
+    await fetch(`${API_BASE}/comment`, {
+      method: "POST",
+      headers: {"Content-Type":"application/json"},
+      body: JSON.stringify({
+        url: PAGE_URL,
+        username,
+        text,
+        parent_id
+      })
+    });
+  }
+
+  // -------------------------
+  // Markdown (VERY minimal safe subset)
+  // -------------------------
+  function renderMarkdown(text) {
+    return escapeHtml(text)
+      .replace(/\*\*(.+?)\*\*/g, "<b>$1</b>")
+      .replace(/\*(.+?)\*/g, "<i>$1</i>")
+      .replace(/`(.+?)`/g, "<code>$1</code>");
+  }
+
+  // -------------------------
+  // Cookie helper
+  // -------------------------
+  function getCookie(name) {
+    return document.cookie
+      .split("; ")
+      .find(row => row.startsWith(name + "="))
+      ?.split("=")[1];
+  }
 
   function escapeHtml(str) {
     return String(str)
