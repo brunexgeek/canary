@@ -1,34 +1,33 @@
 package main
 
 import (
+	"crypto/hmac"
+	"crypto/rand"
+	"crypto/sha256"
+	"crypto/subtle"
+	"database/sql"
+	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
-	"log"
+	"fmt"
 	"net/http"
-	"net/url"
-	"strconv"
-	"sync"
+	"strings"
 	"time"
-
-	bolt "go.etcd.io/bbolt"
 )
 
-var db *bolt.DB
-var idMutex sync.Mutex
-var idCounter uint64 = 1
+const CSRF_COOKIE_NAME = "X-CSRF-Token"
 
-type Comment struct {
-	ID        uint64     `json:"id"`
-	URL       string     `json:"url"`
-	ParentID  *uint64    `json:"parent_id,omitempty"`
-	Username  string     `json:"username"`
-	Text      string     `json:"text"`
-	CreatedAt time.Time  `json:"created_at"`
-	Replies   []*Comment `json:"replies,omitempty"`
-}
+var db *sql.DB
+var csrfSecret = []byte("replace-with-a-long-random-secret-key")
 
 func main() {
+	var log = GetDefaultLog()
+	SetDefaultLevel(DebugLevel)
+
 	var err error
-	db, err = bolt.Open("comments.db", 0600, nil)
+	connStr := "host=localhost port=5432 user=postgres password=secret dbname=comments sslmode=disable"
+
+	db, err = OpenDB(connStr)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -37,19 +36,89 @@ func main() {
 	http.HandleFunc("/comment", handlePostComment)
 	http.HandleFunc("/comments", handleGetComments)
 
-	log.Println("Server running on :8001")
+	log.Infof("Server running on :8001")
 	log.Fatal(http.ListenAndServe(":8001", nil))
 }
 
-func nextID() uint64 {
-	idMutex.Lock()
-	defer idMutex.Unlock()
-	idCounter++
-	return idCounter
+func randInt() int64 {
+	b := make([]byte, 8)
+	rand.Read(b)
+	return int64(binary.LittleEndian.Uint64(b))
 }
 
-func bucketName(pageURL string) []byte {
-	return []byte(url.QueryEscape(pageURL))
+func generate_csrf_token(sessionID string) (string, error) {
+	payload := fmt.Sprintf("%s:%d:%d",
+		sessionID,
+		time.Now().Unix(),
+		randInt(), // optional nonce
+	)
+
+	mac := hmac.New(sha256.New, csrfSecret)
+	mac.Write([]byte(payload))
+	sig := mac.Sum(nil)
+
+	token := base64.RawURLEncoding.EncodeToString([]byte(payload)) +
+		"." +
+		base64.RawURLEncoding.EncodeToString(sig)
+
+	return token, nil
+}
+
+func validate_csrf_token(sessionID, token string) bool {
+	parts := strings.Split(token, ".")
+	if len(parts) != 2 {
+		return false
+	}
+
+	payloadBytes, err := base64.RawURLEncoding.DecodeString(parts[0])
+	if err != nil {
+		return false
+	}
+
+	sig, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return false
+	}
+
+	payload := string(payloadBytes)
+
+	// recompute HMAC
+	mac := hmac.New(sha256.New, csrfSecret)
+	mac.Write([]byte(payload))
+	expectedSig := mac.Sum(nil)
+
+	// constant-time compare
+	if subtle.ConstantTimeCompare(sig, expectedSig) != 1 {
+		return false
+	}
+
+	// optional: validate session binding
+	if !strings.HasPrefix(payload, sessionID+":") {
+		return false
+	}
+
+	return true
+}
+
+func set_csrf_cookie(w http.ResponseWriter, r *http.Request) error {
+	log := GetDefaultLog()
+
+	cookie, err := r.Cookie(CSRF_COOKIE_NAME)
+	if err != nil || !validate_csrf_token("", cookie.Value) {
+		token, err := generate_csrf_token("")
+		if err != nil {
+			return err
+		}
+		http.SetCookie(w, &http.Cookie{
+			Name:     CSRF_COOKIE_NAME,
+			Value:    token,
+			HttpOnly: true,
+			SameSite: http.SameSiteNoneMode,
+			Secure:   false, // should be true in production
+		})
+		log.Debugf("Set CSRF token '%s'", token)
+	}
+	return nil
 }
 
 func handlePostComment(w http.ResponseWriter, r *http.Request) {
@@ -58,11 +127,21 @@ func handlePostComment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	cookie, err := r.Cookie(CSRF_COOKIE_NAME)
+	if err != nil {
+		http.Error(w, "Invalid request", http.StatusBadRequest)
+		return
+	}
+	validate_csrf_token("", cookie.Value)
+
 	var req struct {
 		URL      string  `json:"url"`
-		Username string  `json:"username"`
 		Text     string  `json:"text"`
 		ParentID *uint64 `json:"parent_id,omitempty"`
+	}
+
+	var resp struct {
+		Id uint64 `json:"id"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -70,44 +149,41 @@ func handlePostComment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.URL == "" || req.Username == "" || req.Text == "" {
+	if req.URL == "" || req.Text == "" {
 		http.Error(w, "missing fields", http.StatusBadRequest)
 		return
 	}
+	user := r.Header.Get("X-Remote-User")
+	if user == "" {
+		user = "Anonymous"
+	}
 
 	comment := Comment{
-		ID:        nextID(),
 		URL:       req.URL,
 		ParentID:  req.ParentID,
-		Username:  req.Username,
-		Text:      req.Text,
+		Username:  user,
+		Text:      req.Text, // TODO HTML escape
 		CreatedAt: time.Now().UTC(),
 	}
 
-	err := db.Update(func(tx *bolt.Tx) error {
-		b, err := tx.CreateBucketIfNotExists(bucketName(req.URL))
-		if err != nil {
-			return err
-		}
-
-		data, err := json.Marshal(comment)
-		if err != nil {
-			return err
-		}
-
-		return b.Put([]byte(strconv.FormatUint(comment.ID, 10)), data)
-	})
-
-	if err != nil {
+	if err := SaveComment(db, &comment); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(comment)
+	resp.Id = comment.ID
+	json.NewEncoder(w).Encode(resp)
 }
 
 func handleGetComments(w http.ResponseWriter, r *http.Request) {
+	var log = GetDefaultLog()
+
+	if err := set_csrf_cookie(w, r); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
 	pageURL := r.URL.Query().Get("url")
 	if pageURL == "" {
 		http.Error(w, "missing url", http.StatusBadRequest)
@@ -115,27 +191,12 @@ func handleGetComments(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var comments []*Comment
-
-	err := db.View(func(tx *bolt.Tx) error {
-		b := tx.Bucket(bucketName(pageURL))
-		if b == nil {
-			return nil
-		}
-
-		return b.ForEach(func(_, v []byte) error {
-			var c Comment
-			if err := json.Unmarshal(v, &c); err != nil {
-				return err
-			}
-			comments = append(comments, &c)
-			return nil
-		})
-	})
-
-	if err != nil {
+	var err error
+	if comments, err = GetCommentsByURL(db, pageURL); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	log.Infof("Found %d comments from '%s'", len(comments), r.URL)
 
 	tree := buildTree(comments)
 
@@ -145,7 +206,7 @@ func handleGetComments(w http.ResponseWriter, r *http.Request) {
 
 func buildTree(comments []*Comment) []*Comment {
 	m := map[uint64]*Comment{}
-	var roots []*Comment
+	roots := make([]*Comment, 0)
 
 	for _, c := range comments {
 		m[c.ID] = c

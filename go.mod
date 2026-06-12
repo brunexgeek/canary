@@ -3,7 +3,7 @@ module github.com/brunexgeek/canary
 go 1.25.11
 
 require (
-	go.etcd.io/bbolt v1.4.3
+	github.com/lib/pq v1.12.3
 	golang.org/x/term v0.44.0
 )
 

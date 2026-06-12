@@ -121,3 +121,13 @@ func (l *Logger) Errorf(format string, args ...any) {
 func (l Logger) Error(err error) {
 	l.logf(ErrorLevel, "ERROR", red, "%s", err)
 }
+
+func (l *Logger) Fatalf(format string, args ...any) {
+	l.logf(ErrorLevel, "FATAL", red, format, args...)
+	os.Exit(1)
+}
+
+func (l Logger) Fatal(err error) {
+	l.logf(ErrorLevel, "FATAL", red, "%s", err)
+	os.Exit(1)
+}

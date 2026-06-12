@@ -6,6 +6,11 @@
   .comment {
     font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
   }
+  .comment .card {
+    border: 1px solid #444;
+    padding: .5em;
+    margin-bottom: 1em;
+  }
   .comment .user {
     font-weight: 600;
   }
@@ -28,8 +33,6 @@
 
   <h4>New comment</h4>
   <form id="new-comment-form">
-    <input type="text" id="username" placeholder="username" required>
-    <br>
     <textarea id="text" placeholder="comment..." required></textarea>
     <br>
     <button type="submit">Post</button>
@@ -38,7 +41,7 @@
 
 <script>
 (() => {
-  const API_BASE = "http://127.0.0.1:8001";
+  const API_BASE = "http://127.0.0.1:9000/comments/";
   const PAGE_URL = window.location.pathname;
 
   const listEl = document.getElementById("comment-list");
@@ -49,11 +52,6 @@
 
   // cache so we don't fully refetch on every reply
   let commentCache = [];
-
-  // -------------------------
-  // Init username from cookie
-  // -------------------------
-  usernameEl.value = getCookie("remote_user") || "";
 
   // -------------------------
   // Fetch comments
@@ -74,6 +72,9 @@
 
   function renderComment(comment) {
     const wrap = document.createElement("div");
+    wrap.classList.add("comment");
+    const card = document.createElement("div");
+    card.classList.add("card");
     wrap.dataset.id = comment.id;
 
     const header = document.createElement("div");
@@ -119,9 +120,10 @@
 
     actions.appendChild(replyBtn);
 
-    wrap.appendChild(header);
-    wrap.appendChild(body);
-    wrap.appendChild(actions);
+    card.appendChild(header);
+    card.appendChild(body);
+    card.appendChild(actions);
+    wrap.appendChild(card);
     wrap.appendChild(replyBox);
 
     // replies
@@ -147,8 +149,6 @@
     const form = document.createElement("form");
 
     form.innerHTML = `
-      <input name="username" placeholder="username" required value="${escapeHtml(usernameEl.value)}">
-      <br>
       <textarea name="text" placeholder="reply..." required></textarea>
       <br>
       <button>Send reply</button>
@@ -158,18 +158,17 @@
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
 
-      const username = form.username.value;
       const text = form.text.value;
 
-      const tempComment = optimisticAdd(username, text, parentId);
+      //const tempComment = optimisticAdd(text, parentId);
 
       try {
-        await postComment(username, text, parentId);
+        await postComment(text, parentId);
         await fetchComments();
       } catch (err) {
         console.error(err);
-        alert("Failed to post");
-        removeOptimistic(tempComment.id);
+        //alert("Failed to post");
+        //removeOptimistic(tempComment.id);
       }
     });
 
@@ -182,32 +181,28 @@
   newForm.addEventListener("submit", async (e) => {
     e.preventDefault();
 
-    const username = usernameEl.value;
     const text = textEl.value;
 
-    const temp = optimisticAdd(username, text, null);
+    //const temp = optimisticAdd(text, null);
 
     textEl.value = "";
 
     try {
-      await postComment(username, text, null);
+      await postComment(text, null);
       await fetchComments();
     } catch (err) {
       console.error(err);
-      alert("Failed");
-      removeOptimistic(temp.id);
+      //alert("Failed");
+      //removeOptimistic(temp.id);
     }
   });
 
   // -------------------------
   // Optimistic UI
   // -------------------------
-  function optimisticAdd(username, text, parentId) {
+  function optimisticAdd(text, parentId) {
     const temp = {
-      id: "tmp-" + Math.random(),
-      username,
       text,
-      created_at: new Date().toISOString(),
       parent_id: parentId,
       replies: []
     };
@@ -256,13 +251,12 @@
   // -------------------------
   // API
   // -------------------------
-  async function postComment(username, text, parent_id) {
+  async function postComment(text, parent_id) {
     await fetch(`${API_BASE}/comment`, {
       method: "POST",
       headers: {"Content-Type":"application/json"},
       body: JSON.stringify({
         url: PAGE_URL,
-        username,
         text,
         parent_id
       })
