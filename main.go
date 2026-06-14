@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
-	"database/sql"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
@@ -17,7 +16,6 @@ import (
 
 const CSRF_COOKIE_NAME = "X-CSRF-Token"
 
-var db *sql.DB
 var csrfSecret = []byte("replace-with-a-long-random-secret-key")
 
 func main() {
@@ -33,11 +31,22 @@ func main() {
 	}
 	defer db.Close()
 
-	http.HandleFunc("/comment", handlePostComment)
-	http.HandleFunc("/comments", handleGetComments)
+	http.HandleFunc("/", dispatcher)
 
 	log.Infof("Server running on :8001")
 	log.Fatal(http.ListenAndServe(":8001", nil))
+}
+
+func dispatcher(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodPut {
+		handlePostComment(w, r)
+		return
+	}
+	if r.Method == http.MethodGet {
+		handleGetComments(w, r)
+		return
+	}
+	sendError(w, "method not allowed", 405)
 }
 
 func randInt() int64 {
@@ -50,16 +59,15 @@ func generate_csrf_token(sessionID string) (string, error) {
 	payload := fmt.Sprintf("%s:%d:%d",
 		sessionID,
 		time.Now().Unix(),
-		randInt(), // optional nonce
+		randInt(),
 	)
 
 	mac := hmac.New(sha256.New, csrfSecret)
 	mac.Write([]byte(payload))
 	sig := mac.Sum(nil)
 
-	token := base64.RawURLEncoding.EncodeToString([]byte(payload)) +
-		"." +
-		base64.RawURLEncoding.EncodeToString(sig)
+	token := fmt.Sprintf("%s.%s", base64.RawURLEncoding.EncodeToString([]byte(payload)),
+		base64.RawURLEncoding.EncodeToString(sig))
 
 	return token, nil
 }
@@ -92,7 +100,7 @@ func validate_csrf_token(sessionID, token string) bool {
 		return false
 	}
 
-	// optional: validate session binding
+	// validate session binding
 	if !strings.HasPrefix(payload, sessionID+":") {
 		return false
 	}
@@ -176,24 +184,76 @@ func handlePostComment(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(resp)
 }
 
+func base64URLDecode(s string) (string, error) {
+	// restore padding
+	if m := len(s) % 4; m != 0 {
+		s += strings.Repeat("=", 4-m)
+	}
+
+	b, err := base64.URLEncoding.DecodeString(s)
+	if err != nil {
+		return "", err
+	}
+
+	return string(b), nil
+}
+
+func parse_resource_ref(path string) ([]string, error) {
+	var err error
+
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	length := len(parts)
+	if length == 0 {
+		return nil, fmt.Errorf("missing site")
+	}
+	if length > 2 {
+		return nil, fmt.Errorf("invalid resource name")
+	}
+
+	parts[0], err = base64URLDecode(parts[0])
+	if err != nil {
+		return nil, err
+	}
+
+	if length == 1 {
+		parts[1], err = base64URLDecode(parts[1])
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return parts, nil
+}
+
+func sendError(w http.ResponseWriter, err string, code int) {
+	var log = GetDefaultLog()
+	log.Errorf("%s", err)
+	http.Error(w, err, http.StatusInternalServerError)
+}
+
 func handleGetComments(w http.ResponseWriter, r *http.Request) {
 	var log = GetDefaultLog()
 
 	if err := set_csrf_cookie(w, r); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		sendError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	pageURL := r.URL.Query().Get("url")
-	if pageURL == "" {
-		http.Error(w, "missing url", http.StatusBadRequest)
+	resource, err := parse_resource_ref(r.URL.Path)
+	if err != nil {
+		sendError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	if len(resource) != 2 {
+		sendError(w, "expected absolute resource", http.StatusBadRequest)
+		return
+	}
+
+	pageURL := strings.Join(resource, "")
 
 	var comments []*Comment
-	var err error
 	if comments, err = GetCommentsByURL(db, pageURL); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		sendError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	log.Infof("Found %d comments from '%s'", len(comments), r.URL)
