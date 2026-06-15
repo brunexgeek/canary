@@ -10,14 +10,7 @@
     // cache so we don't fully refetch on every reply
     let commentCache = [];
 
-    async function sha256(str) {
-        const data = new TextEncoder().encode(str);
-        const hashBuffer = await crypto.subtle.digest('SHA-256', data);
-
-        return Array.from(new Uint8Array(hashBuffer))
-            .map(b => b.toString(16).padStart(2, '0'))
-            .join('');
-    }
+    console.info(document.currentScript.src);
 
     function findRootElement() {
         const element = document.querySelector('canary-comments');
@@ -33,21 +26,9 @@
         return element;
     }
 
-    function base64UrlEncode(str) {
-        const bytes = new TextEncoder().encode(str);
-
-        let base64 = btoa(String.fromCharCode(...bytes));
-
-        return base64
-            .replace(/\+/g, '-')
-            .replace(/\//g, '_')
-            .replace(/=+$/, '');
-    }
-
     async function fetchComments() {
-        const site = base64UrlEncode(document.location.origin);
-        const page = base64UrlEncode(document.location.pathname);
-        const res = await fetch(`${CONFIG['api-url']}/${site}/${page}`);
+        const url = encodeURIComponent(document.location.href);
+        const res = await fetch(`${CONFIG['api-url']}/comments?url=${url}`);
         commentCache = await res.json();
         render();
     }
@@ -60,15 +41,55 @@
     }
 
     function renderComment(comment) {
-        const wrap = document.createElement("div");
-        wrap.classList.add("comment");
-        const card = document.createElement("div");
-        card.classList.add("card");
-        wrap.dataset.id = comment.id;
+        const info = document.createElement("div");
+        info.classList.add("comment-info");
+        info.innerHTML = `
+            <a href="#" class="comment-author">${comment.username}</a>
+            <p class="m-0">
+                4 days ago
+            </p>
+        `;
 
-        const header = document.createElement("div");
+        const icon = document.createElement("img");
+        icon.setAttribute("src", `${CONFIG['api-url']}/avatar?user=${encodeURIComponent(comment.username)}`);
 
-        const collapseBtn = document.createElement("button");
+        const heading = document.createElement("div");
+        heading.classList.add("comment-heading");
+        heading.appendChild(icon);
+        heading.appendChild(info);
+
+        const summary = document.createElement("summary");
+        summary.appendChild(heading);
+
+        const body = document.createElement("div");
+        body.classList.add("comment-body");
+
+        content = renderMarkdown(comment.text);
+        body.innerHTML = `
+            ${content}
+            <button type="button" data-toggle="reply-form" data-target="comment-${comment.id}-reply-form">Reply</button>
+
+            <!-- Reply form start -->
+            <div class="reply-form d-none" id="comment-${comment.id}-reply-form">
+                <textarea placeholder="Reply to comment" rows="4"></textarea>
+                <button type="submit">Submit</button>
+                <button type="button" data-toggle="reply-form" data-target="comment-${comment.id}-reply-form">Cancel</button>
+            </div>
+            <!-- Reply form end -->
+        `;
+
+        const link = document.createElement("a");
+        link.classList.add("comment-border-link");
+
+        const details = document.createElement("details");
+        details.classList.add("comment");
+        details.setAttribute("open", "");
+        details.id = `comment-${comment.id}`;
+        details.appendChild(link);
+        details.appendChild(summary);
+        details.appendChild(body);
+
+        /*const collapseBtn = document.createElement("button");
         collapseBtn.textContent = "-";
         collapseBtn.onclick = () => {
             const body = wrap.querySelector(".body");
@@ -77,58 +98,21 @@
             body.style.display = hidden ? "" : "none";
             if (replies) replies.style.display = hidden ? "" : "none";
             collapseBtn.textContent = hidden ? "-" : "+";
-        };
-
-        header.innerHTML = `
-      <strong>${escapeHtml(comment.username)}</strong>
-      <small>#${comment.id}</small>
-      <small>${new Date(comment.created_at).toLocaleString()}</small>
-    `;
-
-        header.prepend(collapseBtn);
-
-        const body = document.createElement("div");
-        body.className = "body";
-        body.innerHTML = renderMarkdown(comment.text);
-
-        const actions = document.createElement("div");
-
-        const replyBtn = document.createElement("button");
-        replyBtn.textContent = "Reply";
-
-        const replyBox = document.createElement("div");
-
-        replyBtn.onclick = () => {
-            if (replyBox.childNodes.length) {
-                replyBox.innerHTML = "";
-                return;
-            }
-
-            replyBox.appendChild(createReplyForm(comment.id));
-        };
-
-        actions.appendChild(replyBtn);
-
-        card.appendChild(header);
-        card.appendChild(body);
-        card.appendChild(actions);
-        wrap.appendChild(card);
-        wrap.appendChild(replyBox);
+        };*/
 
         // replies
         if (comment.replies?.length) {
             const replies = document.createElement("div");
             replies.className = "replies";
-            replies.style.marginLeft = "20px";
 
             comment.replies.forEach(r => {
                 replies.appendChild(renderComment(r));
             });
 
-            wrap.appendChild(replies);
+            details.appendChild(replies);
         }
 
-        return wrap;
+        return details;
     }
 
     // -------------------------
@@ -237,39 +221,31 @@
         return null;
     }
 
-    // -------------------------
-    // API
-    // -------------------------
     async function postComment(text, parent_id) {
-        await fetch(`${API_BASE}/comment`, {
+        const url = document.location.href;
+        await fetch(`${CONFIG['api-url']}/comments`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
-                url: PAGE_URL,
+                url,
                 text,
                 parent_id
             })
         });
     }
 
-    // -------------------------
-    // Markdown (VERY minimal safe subset)
-    // -------------------------
     function renderMarkdown(text) {
-        return escapeHtml(text)
-            .replace(/\*\*(.+?)\*\*/g, "<b>$1</b>")
-            .replace(/\*(.+?)\*/g, "<i>$1</i>")
-            .replace(/`(.+?)`/g, "<code>$1</code>");
-    }
-
-    // -------------------------
-    // Cookie helper
-    // -------------------------
-    function getCookie(name) {
-        return document.cookie
-            .split("; ")
-            .find(row => row.startsWith(name + "="))
-            ?.split("=")[1];
+        let content = escapeHtml(text).split('\n');
+        for (i = 0; i < content.length; ++i) {
+            let line = content[i].trim();
+            if (line.length == 0)
+                continue;
+            line = line.replace(/\*\*([^*]+?)\*\*/g, "<b>$1</b>")
+                .replace(/\*([^*]+?)\*/g, "<i>$1</i>")
+                .replace(/`([^`]+?)`/g, "<code>$1</code>");
+            content[i] = `<p>${line}</p>`;
+        }
+        return content.join("");
     }
 
     function escapeHtml(str) {

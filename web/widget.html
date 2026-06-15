@@ -1,33 +1,25 @@
 <html>
-  <head><title>Widget</title>
+  <head>
+    <title>Widget</title>
+    <link rel="stylesheet" href="http://localhost:9000/canary.css"/>
   </head>
 <body>
 <style>
-  .comment {
+  body {
     font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
   }
-  .comment .card {
-    border: 1px solid #444;
-    padding: .5em;
-    margin-bottom: 1em;
-  }
-  .comment .user {
-    font-weight: 600;
-  }
-  .comment button {
-    background-color: transparent;
-    text-decoration: underline;
-    font-size: .9em;
-    border: none;
-  }
-  .replies {
-    margin-left: 2em;
-  }
 </style>
+
 <div id="comment-widget">
   <h3>Comments</h3>
 
-  <canary-comments api-url="http://localhost:9000/_canary/"></canary-comments>
+  <div class="canary-comments">
+  <div class="reply-form" id="comment-${comment.id}-reply-form">
+    <textarea placeholder="Reply to comment" rows="4"></textarea>
+    <button type="submit">Submit</button>
+  </div>
+  </div>
+  <canary-comments class="canary-comments" api-url="http://localhost:9000/_canary/"></canary-comments>
 
   <hr>
 
@@ -37,6 +29,7 @@
     <br>
     <button type="submit">Post</button>
   </form>
+
 </div>
 
 <script src="canary.js"></script>

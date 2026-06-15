@@ -85,7 +85,7 @@ func GetCommentsByURL(db interface{}, url string) ([]*Comment, error) {
 	var result []*Comment
 
 	for _, c := range comments {
-		if c.URL == url && c.ParentID == nil {
+		if c.URL == url {
 			cp := *c
 			result = append(result, &cp)
 		}

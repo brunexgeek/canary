@@ -6,15 +6,21 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
-	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
 
-const CSRF_COOKIE_NAME = "X-CSRF-Token"
+const COOKIE_CSRF = "canary_csrf_Token"
+const X_ORIGINAL_URI = "X-Original-Uri"
+const X_ORIGINAL_PATH = "X-Original-Path"
+const X_REMOTE_USER = "X-Remote-User"
+
+const ENDPOINT_COMMENT = "/comments"
+const ENDPOINT_AVATAR = "/avatar"
 
 var csrfSecret = []byte("replace-with-a-long-random-secret-key")
 
@@ -31,14 +37,35 @@ func main() {
 	}
 	defer db.Close()
 
-	http.HandleFunc("/", dispatcher)
+	http.HandleFunc(ENDPOINT_COMMENT, dispatcher)
+	http.HandleFunc(ENDPOINT_AVATAR, handleAvatar)
 
 	log.Infof("Server running on :8001")
 	log.Fatal(http.ListenAndServe(":8001", nil))
 }
 
+func getQueryParameter(r *http.Request, name string, value string) (string, bool) {
+	values, ok := r.URL.Query()[name]
+	if !ok || len(values) == 0 {
+		return value, false
+	}
+	temp, err := url.QueryUnescape(strings.Join(values, ""))
+	if err != nil {
+		return value, false
+	}
+	return temp, true
+}
+
+func handleAvatar(w http.ResponseWriter, r *http.Request) {
+	username, _ := getQueryParameter(r, "user", "anonymous")
+
+	w.Header().Add("Content-Type", "image/svg+xml")
+	w.Write([]byte(GenerateIdenticon(username)))
+}
+
 func dispatcher(w http.ResponseWriter, r *http.Request) {
-	if r.Method == http.MethodPut {
+	r.Header[X_ORIGINAL_PATH] = []string{getOriginalPath(r)}
+	if r.Method == http.MethodPost {
 		handlePostComment(w, r)
 		return
 	}
@@ -49,17 +76,17 @@ func dispatcher(w http.ResponseWriter, r *http.Request) {
 	sendError(w, "method not allowed", 405)
 }
 
-func randInt() int64 {
+func computeNonce() string {
 	b := make([]byte, 8)
 	rand.Read(b)
-	return int64(binary.LittleEndian.Uint64(b))
+	return base64.RawURLEncoding.EncodeToString(b)
 }
 
 func generate_csrf_token(sessionID string) (string, error) {
-	payload := fmt.Sprintf("%s:%d:%d",
+	payload := fmt.Sprintf("%s:%d:%s",
 		sessionID,
 		time.Now().Unix(),
-		randInt(),
+		computeNonce(),
 	)
 
 	mac := hmac.New(sha256.New, csrfSecret)
@@ -108,21 +135,37 @@ func validate_csrf_token(sessionID, token string) bool {
 	return true
 }
 
+func getOriginalPath(r *http.Request) string {
+	location := "/"
+	// TODO use configuration to know if we should trust this header
+	if surl, ok := r.Header[X_ORIGINAL_URI]; ok {
+		url, err := url.Parse(strings.Join(surl, ""))
+		if err == nil {
+			pos := strings.LastIndex(url.Path, r.URL.Path)
+			if pos >= 0 {
+				location = url.Path[:pos] + "/"
+			}
+		}
+	}
+	return location
+}
+
 func set_csrf_cookie(w http.ResponseWriter, r *http.Request) error {
 	log := GetDefaultLog()
 
-	cookie, err := r.Cookie(CSRF_COOKIE_NAME)
+	cookie, err := r.Cookie(COOKIE_CSRF)
 	if err != nil || !validate_csrf_token("", cookie.Value) {
 		token, err := generate_csrf_token("")
 		if err != nil {
 			return err
 		}
 		http.SetCookie(w, &http.Cookie{
-			Name:     CSRF_COOKIE_NAME,
+			Name:     COOKIE_CSRF,
 			Value:    token,
 			HttpOnly: true,
-			SameSite: http.SameSiteNoneMode,
+			SameSite: http.SameSiteLaxMode,
 			Secure:   false, // should be true in production
+			Path:     r.Header.Get(X_ORIGINAL_PATH),
 		})
 		log.Debugf("Set CSRF token '%s'", token)
 	}
@@ -130,12 +173,7 @@ func set_csrf_cookie(w http.ResponseWriter, r *http.Request) error {
 }
 
 func handlePostComment(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "POST only", http.StatusMethodNotAllowed)
-		return
-	}
-
-	cookie, err := r.Cookie(CSRF_COOKIE_NAME)
+	cookie, err := r.Cookie(COOKIE_CSRF)
 	if err != nil {
 		http.Error(w, "Invalid request", http.StatusBadRequest)
 		return
@@ -161,7 +199,8 @@ func handlePostComment(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing fields", http.StatusBadRequest)
 		return
 	}
-	user := r.Header.Get("X-Remote-User")
+	// TODO use configuration to know if we should trust this header
+	user := r.Header.Get(X_REMOTE_USER)
 	if user == "" {
 		user = "Anonymous"
 	}
@@ -184,51 +223,23 @@ func handlePostComment(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(resp)
 }
 
-func base64URLDecode(s string) (string, error) {
-	// restore padding
-	if m := len(s) % 4; m != 0 {
-		s += strings.Repeat("=", 4-m)
-	}
-
-	b, err := base64.URLEncoding.DecodeString(s)
-	if err != nil {
-		return "", err
-	}
-
-	return string(b), nil
-}
-
-func parse_resource_ref(path string) ([]string, error) {
-	var err error
-
-	parts := strings.Split(strings.Trim(path, "/"), "/")
-	length := len(parts)
-	if length == 0 {
-		return nil, fmt.Errorf("missing site")
-	}
-	if length > 2 {
-		return nil, fmt.Errorf("invalid resource name")
-	}
-
-	parts[0], err = base64URLDecode(parts[0])
-	if err != nil {
-		return nil, err
-	}
-
-	if length == 1 {
-		parts[1], err = base64URLDecode(parts[1])
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	return parts, nil
-}
-
-func sendError(w http.ResponseWriter, err string, code int) {
+func sendError(w http.ResponseWriter, message string, code int) {
 	var log = GetDefaultLog()
-	log.Errorf("%s", err)
-	http.Error(w, err, http.StatusInternalServerError)
+	log.Errorf("%s", message)
+
+	output := struct {
+		Message string `json:"message"`
+		Code    int    `json:"code"`
+	}{
+		Message: message,
+		Code:    code,
+	}
+	content, err := json.Marshal(output)
+	if err != nil {
+		http.Error(w, message, code)
+	} else {
+		http.Error(w, string(content), code)
+	}
 }
 
 func handleGetComments(w http.ResponseWriter, r *http.Request) {
@@ -239,24 +250,23 @@ func handleGetComments(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resource, err := parse_resource_ref(r.URL.Path)
+	values, ok := r.URL.Query()["url"]
+	if !ok || len(values) == 0 {
+		sendError(w, "expected page URL", http.StatusBadRequest)
+		return
+	}
+	pageURL, err := url.QueryUnescape(strings.Join(values, ""))
 	if err != nil {
-		sendError(w, err.Error(), http.StatusBadRequest)
+		sendError(w, "invalid page URL", http.StatusBadRequest)
 		return
 	}
-	if len(resource) != 2 {
-		sendError(w, "expected absolute resource", http.StatusBadRequest)
-		return
-	}
-
-	pageURL := strings.Join(resource, "")
 
 	var comments []*Comment
 	if comments, err = GetCommentsByURL(db, pageURL); err != nil {
-		sendError(w, err.Error(), http.StatusInternalServerError)
+		sendError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	log.Infof("Found %d comments from '%s'", len(comments), r.URL)
+	log.Infof("Found %d comments from '%s'", len(comments), pageURL)
 
 	tree := buildTree(comments)
 
