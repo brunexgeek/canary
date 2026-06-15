@@ -37,6 +37,15 @@
         requestAnimationFrame( () => {
             ROOT_ELEMENT.innerHTML = "";
             commentCache.forEach(c => ROOT_ELEMENT.appendChild(renderComment(c)));
+            // event listener for 'Reply' and 'Cancel' buttons
+            ROOT_ELEMENT.querySelectorAll("[data-toggle='reply-form']").forEach( element => {
+                element.addEventListener("click", event => {
+                    const replyForm = document.getElementById(event.currentTarget.getAttribute("data-target"));
+                    replyForm.classList.toggle("d-none");
+                })
+            });
+            // event listener for 'Submit' buttons
+            setSubmitListeners();
         });
     }
 
@@ -70,11 +79,11 @@
             <button type="button" data-toggle="reply-form" data-target="comment-${comment.id}-reply-form">Reply</button>
 
             <!-- Reply form start -->
-            <div class="reply-form d-none" id="comment-${comment.id}-reply-form">
+            <form class="reply-form d-none" id="comment-${comment.id}-reply-form" data-parent-id="${comment.id}">
                 <textarea placeholder="Reply to comment" rows="4"></textarea>
                 <button type="submit">Submit</button>
                 <button type="button" data-toggle="reply-form" data-target="comment-${comment.id}-reply-form">Cancel</button>
-            </div>
+            </form>
             <!-- Reply form end -->
         `;
 
@@ -148,27 +157,28 @@
         return form;
     }
 
-    // -------------------------
-    // New comment form
-    // -------------------------
-    newForm.addEventListener("submit", async (e) => {
-        e.preventDefault();
+    function setSubmitListeners() {
+        document.querySelectorAll("form.reply-form").forEach(form => {
+            form.addEventListener("submit", async (e) => {
+                e.preventDefault();
+                let form = e.currentTarget.closest("form");
+                const textarea = form.querySelector("textarea");
+                const parent = form.getAttribute("data-parent-id");
+                const text = textarea.value;
+                textarea.value = "";
+                //const temp = optimisticAdd(text, null);
 
-        const text = textEl.value;
-
-        //const temp = optimisticAdd(text, null);
-
-        textEl.value = "";
-
-        try {
-            await postComment(text, null);
-            await fetchComments();
-        } catch (err) {
-            console.error(err);
-            //alert("Failed");
-            //removeOptimistic(temp.id);
-        }
-    });
+                try {
+                    await postComment(text, parent === null ? null : parseInt(parent));
+                    await fetchComments();
+                } catch (err) {
+                    console.error(err);
+                    //alert("Failed");
+                    //removeOptimistic(temp.id);
+                }
+            });
+        });
+    }
 
     // -------------------------
     // Optimistic UI
@@ -255,5 +265,6 @@
             .replaceAll(">", "&gt;");
     }
 
+    setSubmitListeners();
     fetchComments();
 })();

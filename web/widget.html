@@ -1,3 +1,4 @@
+<!DOCTYPE html>
 <html>
   <head>
     <title>Widget</title>
@@ -14,11 +15,11 @@
   <h3>Comments</h3>
 
   <div class="canary-comments">
-  <div class="reply-form" id="comment-${comment.id}-reply-form">
+  <form class="reply-form">
     <textarea placeholder="Reply to comment" rows="4"></textarea>
     <button type="submit">Submit</button>
   </div>
-  </div>
+</form>
   <canary-comments class="canary-comments" api-url="http://localhost:9000/_canary/"></canary-comments>
 
   <hr>
