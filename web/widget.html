@@ -1,38 +1,32 @@
 <!DOCTYPE html>
 <html>
-  <head>
-    <title>Widget</title>
-    <link rel="stylesheet" href="http://localhost:9000/canary.css"/>
-  </head>
+
+<head>
+  <title>Widget</title>
+  <link rel="stylesheet" href="http://localhost:9000/canary.css" />
+</head>
+
 <body>
-<style>
-  body {
-    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-  }
-</style>
+  <style>
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    }
+  </style>
 
-<div id="comment-widget">
-  <h3>Comments</h3>
+  <div id="comment-widget">
+    <h3>Comments</h3>
 
-  <div class="canary-comments">
-  <form class="reply-form">
-    <textarea placeholder="Reply to comment" rows="4"></textarea>
-    <button type="submit">Submit</button>
+    <div class="canary-comments">
+      <form class="reply-form">
+        <textarea placeholder="Reply to comment" rows="4"></textarea>
+        <button type="submit">Submit</button>
+    </div>
+    </form>
+    <canary-comments class="canary-comments" api-url="http://localhost:9000/_canary/"></canary-comments>
+
   </div>
-</form>
-  <canary-comments class="canary-comments" api-url="http://localhost:9000/_canary/"></canary-comments>
 
-  <hr>
-
-  <h4>New comment</h4>
-  <form id="new-comment-form">
-    <textarea id="text" placeholder="comment..." required></textarea>
-    <br>
-    <button type="submit">Post</button>
-  </form>
-
-</div>
-
-<script src="canary.js"></script>
+  <script src="canary.js"></script>
 </body>
+
 </html>

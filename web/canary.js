@@ -159,24 +159,28 @@
 
     function setSubmitListeners() {
         document.querySelectorAll("form.reply-form").forEach(form => {
-            form.addEventListener("submit", async (e) => {
-                e.preventDefault();
-                let form = e.currentTarget.closest("form");
-                const textarea = form.querySelector("textarea");
-                const parent = form.getAttribute("data-parent-id");
-                const text = textarea.value;
-                textarea.value = "";
-                //const temp = optimisticAdd(text, null);
+            if (!form._hasListener) {
+                form.addEventListener("submit", async (e) => {
+                    e.preventDefault();
+                    let form = e.currentTarget.closest("form");
+                    const textarea = form.querySelector("textarea");
+                    const parent = form.getAttribute("data-parent-id");
+                    console.log(textarea);
+                    const text = textarea.value;
+                    textarea.value = "";
+                    //const temp = optimisticAdd(text, null);
 
-                try {
-                    await postComment(text, parent === null ? null : parseInt(parent));
-                    await fetchComments();
-                } catch (err) {
-                    console.error(err);
-                    //alert("Failed");
-                    //removeOptimistic(temp.id);
-                }
-            });
+                    try {
+                        await postComment(text, parent === null ? null : parseInt(parent));
+                        await fetchComments();
+                    } catch (err) {
+                        console.error(err);
+                        //alert("Failed");
+                        //removeOptimistic(temp.id);
+                    }
+                });
+                form._hasListener = true;
+            }
         });
     }
 

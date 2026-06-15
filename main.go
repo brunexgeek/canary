@@ -199,6 +199,7 @@ func handlePostComment(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing fields", http.StatusBadRequest)
 		return
 	}
+	req.URL = strings.Split(strings.Split(req.URL, "?")[0], "#")[0]
 	// TODO use configuration to know if we should trust this header
 	user := r.Header.Get(X_REMOTE_USER)
 	if user == "" {
@@ -217,6 +218,9 @@ func handlePostComment(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+
+	log := GetDefaultLog()
+	log.Infof("Received comment from '%s' for '%s'", user, req.URL)
 
 	w.Header().Set("Content-Type", "application/json")
 	resp.Id = comment.ID
@@ -250,23 +254,24 @@ func handleGetComments(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	values, ok := r.URL.Query()["url"]
-	if !ok || len(values) == 0 {
+	pageURL, ok := getQueryParameter(r, "url", "")
+	if !ok {
 		sendError(w, "expected page URL", http.StatusBadRequest)
 		return
 	}
-	pageURL, err := url.QueryUnescape(strings.Join(values, ""))
-	if err != nil {
-		sendError(w, "invalid page URL", http.StatusBadRequest)
-		return
-	}
+	pageURL = strings.Split(strings.Split(pageURL, "?")[0], "#")[0]
 
 	var comments []*Comment
+	var err error
 	if comments, err = GetCommentsByURL(db, pageURL); err != nil {
 		sendError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	log.Infof("Found %d comments from '%s'", len(comments), pageURL)
+	if len(comments) == 1 {
+		log.Infof("Found %d comment from '%s'", len(comments), pageURL)
+	} else {
+		log.Infof("Found %d comments from '%s'", len(comments), pageURL)
+	}
 
 	tree := buildTree(comments)
 
